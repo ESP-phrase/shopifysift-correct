@@ -26,5 +26,7 @@
   "output": "results.csv",
   "per_page": 50,
   "max_pages_per_query": 4,
-  "sleep_between_queries": 4
+  "sleep_between_queries": 4,
+
+  "headless": true
 }

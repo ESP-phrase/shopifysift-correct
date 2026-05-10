@@ -1,70 +1,64 @@
 # ShopifySift
 
-GitHub code scraper for finding tech-stack mentions, brand references, and other public-metadata leads. Pairs a Python scraper with a Flask dashboard.
+GitHub code-search lead-gen tool. Two parts:
+
+- **`web/`** — Next.js 16 dashboard, deploys to **Vercel**.
+- **`worker/`** — Python scraper that hits the GitHub API. Run locally (or on Railway/Fly later); writes results that the web app reads.
 
 > Searches public code only. Not a credential harvester.
 
 ## Layout
 
 ```
-scraper.py          # CLI scraper, reads config.json + queries
-dashboard.py        # Flask UI (login-gated)
-config.json         # queries, path filters, proxy settings
-proxies.txt         # one proxy per line (gitignored)
-templates/          # login + dashboard HTML
+shopifysift/
+├── web/                    # Next.js — Vercel deployment target
+│   ├── src/app/            # routes (login, dashboard, /api/login, /api/logout, /api/rows)
+│   ├── src/lib/            # auth, results loader
+│   ├── src/components/     # ResultsTable
+│   ├── data/results.json   # populated by the scraper, read by the dashboard
+│   └── .env.example
+└── worker/                 # Python scraper
+    ├── scraper.py          # CLI scraper
+    ├── config.json         # queries, path filters, proxy settings
+    ├── proxies.txt         # gitignored — paste your residential proxies
+    └── requirements.txt
 ```
 
-## Quick start
+## Deploy to Vercel
+
+1. Connect this repo to Vercel.
+2. **Root Directory:** `web` (Project Settings → General).
+3. Add env vars (Project Settings → Environment Variables):
+   - `SHOPIFYSIFT_USER`
+   - `SHOPIFYSIFT_PASS`
+   - `SHOPIFYSIFT_SECRET` — at least 32 chars; generate with `python -c "import secrets; print(secrets.token_hex(32))"`
+4. Deploy.
+
+Each scraper run produces fresh `web/data/results.json`; commit and push to redeploy with new data.
+
+## Local dev — web
 
 ```powershell
-# 1. install
+cd web
+copy .env.example .env.local
+# edit .env.local
+npm install
+npm run dev   # http://localhost:3000
+```
+
+## Local dev — scraper
+
+```powershell
+cd worker
 pip install -r requirements.txt
-
-# 2. configure
-copy .env.example .env
-# edit .env and set GITHUB_TOKEN + dashboard creds
-
-# 3. (optional) edit config.json to change what you're searching for
-# 4. (optional) paste residential proxies into proxies.txt
-
-# 5. run scraper directly...
+$env:GITHUB_TOKEN = "ghp_xxx"
 python scraper.py "myshopify.com" "powered by stripe"
-
-# ...or run the dashboard
-python dashboard.py --port 3010
-# open http://127.0.0.1:3010
 ```
 
-## Config
+`config.json` controls queries, path filters, and proxy file location. GitHub code-search dorks (`filename:`, `extension:`, `language:`, `path:`, `repo:`, `org:`) work in queries.
 
-Edit `config.json` to change what's searched:
-
-```json
-{
-  "queries": ["\"myshopify.com\"", "\"powered by shopify\""],
-  "path_filters": [".env", "config", "readme"],
-  "proxies_file": "proxies.txt"
-}
-```
-
-GitHub code-search dorks work in queries: `filename:`, `extension:`, `language:`, `path:`, `repo:`, `org:`.
-
-## Proxies
-
-`proxies.txt` accepts `http://user:pass@host:port`, `host:port:user:pass`, or `host:port`. The scraper rotates round-robin per request. Note: GitHub rate-limits per **token**, not IP — proxies help with network-level blocking only.
+The scraper currently writes `results.csv`; convert to `web/data/results.json` (e.g. with `python -c "import csv,json,sys; print(json.dumps([dict(r) for r in csv.DictReader(open('worker/results.csv'))]))" > web/data/results.json`) before committing.
 
 ## Auth
 
-The dashboard reads credentials from env vars:
-- `SHOPIFYSIFT_USER` (default: `admin`)
-- `SHOPIFYSIFT_PASS` (default: `admin` — change this!)
-- `SHOPIFYSIFT_SECRET` — long random hex for session signing
-
-OAuth buttons (Google/GitHub/Microsoft) are styled but not wired.
-
-## Known limitations
-
-- Flask dev server, not production-ready (use waitress/gunicorn behind a reverse proxy for hosting).
-- Single shared GitHub token — multi-user setups will rate-limit.
-- Scraper runs synchronously inside the dashboard request; long jobs block.
-- Not deployable to Vercel as-is (subprocess + filesystem writes don't fit the serverless model).
+Single-user shim — credentials in env vars, JWT-signed cookie. Real auth (Supabase, OAuth) comes next.

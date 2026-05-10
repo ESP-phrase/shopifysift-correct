@@ -1,21 +1,26 @@
-# secrets / runtime data — never commit
+# --- Node / Next.js (web/) ---
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Python (worker/) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+runs/
+
+# --- Secrets / runtime data — NEVER commit ---
 .env
 .env.*
 !.env.example
-proxies.txt
-results.csv
-runs/
-*.log
+**/proxies.txt
+**/results.csv
 
-# python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-env/
-
-# editor / os
+# --- Editor / OS ---
 .vscode/
 .idea/
 .DS_Store
