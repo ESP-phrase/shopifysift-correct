@@ -1,0 +1,30 @@
+{
+  "_comment": "Edit this file to control what the scraper looks for. CLI args override these values.",
+
+  "queries": [
+    "\"myshopify.com\"",
+    "\"powered by shopify\"",
+    "\"woocommerce\" filename:config",
+    "\"discord.gg/\" extension:md",
+    "\"SUPABASE_URL\" extension:env",
+    "\"NEXT_PUBLIC_\" language:typescript",
+    "\"stripe\" language:python"
+  ],
+
+  "path_filters": [
+    ".env",
+    "config",
+    "settings",
+    "docker-compose",
+    "readme",
+    "package.json"
+  ],
+
+  "proxies_file": "proxies.txt",
+  "proxies": [],
+
+  "output": "results.csv",
+  "per_page": 50,
+  "max_pages_per_query": 4,
+  "sleep_between_queries": 4
+}

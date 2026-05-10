@@ -1,0 +1,11 @@
+# One query per line. Lines starting with # are comments.
+# Supports GitHub code-search dorks: filename: extension: language: path: repo: org:
+# Wrap exact phrases in double quotes.
+
+"myshopify.com"
+"powered by shopify"
+"woocommerce" filename:config
+"discord.gg/" extension:md
+"SUPABASE_URL" extension:env
+"NEXT_PUBLIC_" language:typescript
+"stripe" language:python
