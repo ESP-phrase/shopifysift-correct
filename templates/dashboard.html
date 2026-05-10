@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard — gh-scraper</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">gh-scraper</div>
+    <div class="right">
+      <span class="muted">{{ user }}</span>
+      <form method="post" action="{{ url_for('logout') }}" class="inline">
+        <button type="submit" class="link">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="panel">
+      <h2>New search</h2>
+      <form method="post" action="{{ url_for('scrape_view') }}" class="row">
+        <input
+          type="text"
+          name="query"
+          placeholder='Keyword(s) — e.g. "shopify app" or "stripe webhook"'
+          required
+          autocomplete="off"
+        >
+        <label class="pages">
+          Pages
+          <input type="number" name="max_pages" value="3" min="1" max="10">
+        </label>
+        <button type="submit">Scrape</button>
+      </form>
+      <p class="muted small">
+        Scrapes <code>github.com/search?type=repositories</code> with a real browser
+        (Playwright + stealth). Each search runs in the background — results stream into
+        the table below.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>Jobs</h2>
+      <table class="jobs">
+        <thead>
+          <tr>
+            <th>Query</th>
+            <th>Status</th>
+            <th>Found</th>
+            <th>Started</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body">
+          <tr><td colspan="5" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="results-panel" hidden>
+      <h2>Results <span class="muted small" id="results-label"></span></h2>
+      <table class="repos">
+        <thead>
+          <tr>
+            <th>Repo</th>
+            <th>Description</th>
+            <th>Lang</th>
+            <th>Stars</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="repos-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+<script>
+let activeJobId = null;
+
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString();
+}
+
+function statusBadge(s) {
+  return `<span class="badge ${s}">${s}</span>`;
+}
+
+async function refreshJobs() {
+  const res = await fetch("/api/jobs");
+  if (!res.ok) return;
+  const jobs = await res.json();
+  const tbody = document.getElementById("jobs-body");
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No jobs yet — start one above.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = jobs.map(j => `
+    <tr>
+      <td><code>${escapeHtml(j.query)}</code></td>
+      <td>${statusBadge(j.status)}${j.error ? ` <span class="muted small">${escapeHtml(j.error)}</span>` : ""}</td>
+      <td>${j.repo_count}</td>
+      <td class="muted small">${fmtTime(j.started_at || j.created_at)}</td>
+      <td><button class="link" onclick="showResults(${j.id}, ${JSON.stringify(j.query).replace(/"/g, '&quot;')})">View</button></td>
+    </tr>
+  `).join("");
+
+  // If the current panel job is still running, refresh its results too.
+  if (activeJobId) {
+    const j = jobs.find(x => x.id === activeJobId);
+    if (j) refreshResults(activeJobId, j.query);
+  }
+}
+
+async function showResults(jobId, query) {
+  activeJobId = jobId;
+  document.getElementById("results-panel").hidden = false;
+  document.getElementById("results-label").textContent = `— "${query}"`;
+  await refreshResults(jobId, query);
+  document.getElementById("results-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+async function refreshResults(jobId, query) {
+  const res = await fetch(`/api/repos?job_id=${jobId}`);
+  if (!res.ok) return;
+  const repos = await res.json();
+  const tbody = document.getElementById("repos-body");
+  if (!repos.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No results yet…</td></tr>';
+    return;
+  }
+  tbody.innerHTML = repos.map(r => `
+    <tr>
+      <td><a href="${escapeAttr(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.full_name)}</a></td>
+      <td>${escapeHtml(r.description || "")}</td>
+      <td>${escapeHtml(r.language || "")}</td>
+      <td>${r.stars ?? ""}</td>
+      <td class="muted small">${escapeHtml(r.updated || "")}</td>
+    </tr>
+  `).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
+
+refreshJobs();
+setInterval(refreshJobs, 3000);
+</script>
+</body>
+</html>

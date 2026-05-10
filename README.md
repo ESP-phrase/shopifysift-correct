@@ -1,64 +1,85 @@
-# ShopifySift
+# gh-scraper
 
-GitHub code-search lead-gen tool. Two parts:
+Browser-based GitHub repository scraper with a small Flask dashboard.
 
-- **`web/`** — Next.js 16 dashboard, deploys to **Vercel**.
-- **`worker/`** — Python scraper that hits the GitHub API. Run locally (or on Railway/Fly later); writes results that the web app reads.
+Searches `github.com/search?type=repositories` using a real Chromium (Playwright + stealth), rotating proxies and randomizing browser fingerprints. Submitted searches run in a background thread and stream results into a SQLite-backed dashboard.
 
-> Searches public code only. Not a credential harvester.
+## What it does
+
+- Login-gated dashboard (single-user via env vars)
+- Submit a keyword search; the scraper opens a real browser, types the query into GitHub's search box, switches to the Repositories tab, and paginates with click-throughs
+- Results stream live into a table — repo, description, language, stars, last updated
+- Optional proxy rotation per job
+- Persists everything in a local SQLite file (`scraper.db`)
+
+## Quick start
+
+```powershell
+# 1. install
+pip install -r requirements.txt
+playwright install chromium
+
+# 2. configure
+copy .env.example .env
+# edit .env: set DASH_USER, DASH_PASS, and a 64-char SECRET_KEY
+
+# 3. run
+python app.py
+# open http://127.0.0.1:8000
+```
+
+For production, use waitress instead of the dev server:
+
+```powershell
+waitress-serve --host=0.0.0.0 --port=8000 app:app
+```
 
 ## Layout
 
 ```
-shopifysift/
-├── web/                    # Next.js — Vercel deployment target
-│   ├── src/app/            # routes (login, dashboard, /api/login, /api/logout, /api/rows)
-│   ├── src/lib/            # auth, results loader
-│   ├── src/components/     # ResultsTable
-│   ├── data/results.json   # populated by the scraper, read by the dashboard
-│   └── .env.example
-└── worker/                 # Python scraper
-    ├── scraper.py          # CLI scraper
-    ├── config.json         # queries, path filters, proxy settings
-    ├── proxies.txt         # gitignored — paste your residential proxies
-    └── requirements.txt
+gh-scraper/
+├── app.py            # Flask app — routes, auth, jobs, DB
+├── scraper.py        # Playwright scraper — async, callable from app
+├── templates/
+│   ├── login.html
+│   └── dashboard.html
+├── static/
+│   └── style.css
+├── requirements.txt
+├── .env.example
+└── proxies.txt       # (optional, gitignored)
 ```
 
-## Deploy to Vercel
+## Proxies
 
-1. Connect this repo to Vercel.
-2. **Root Directory:** `web` (Project Settings → General).
-3. Add env vars (Project Settings → Environment Variables):
-   - `SHOPIFYSIFT_USER`
-   - `SHOPIFYSIFT_PASS`
-   - `SHOPIFYSIFT_SECRET` — at least 32 chars; generate with `python -c "import secrets; print(secrets.token_hex(32))"`
-4. Deploy.
+Set `PROXIES_FILE=proxies.txt` in `.env` and create `proxies.txt` with one proxy per line:
 
-Each scraper run produces fresh `web/data/results.json`; commit and push to redeploy with new data.
+```
+http://user:pass@host:port
+host:port:user:pass
+host:port
+```
 
-## Local dev — web
+The scraper picks one per job (round-robin across the process lifetime).
+
+## Env vars
+
+| Name | Required | Default | Notes |
+|---|---|---|---|
+| `SECRET_KEY` | yes | — | 64-char hex; signs session cookies |
+| `DASH_USER` | no | `admin` | dashboard username |
+| `DASH_PASS` | no | `admin` | **change this** before public exposure |
+| `PROXIES_FILE` | no | (none) | path to proxy list |
+| `PORT` | no | `8000` | dev server port |
+
+Generate a `SECRET_KEY`:
 
 ```powershell
-cd web
-copy .env.example .env.local
-# edit .env.local
-npm install
-npm run dev   # http://localhost:3000
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-## Local dev — scraper
+## Notes / limitations
 
-```powershell
-cd worker
-pip install -r requirements.txt
-$env:GITHUB_TOKEN = "ghp_xxx"
-python scraper.py "myshopify.com" "powered by stripe"
-```
-
-`config.json` controls queries, path filters, and proxy file location. GitHub code-search dorks (`filename:`, `extension:`, `language:`, `path:`, `repo:`, `org:`) work in queries.
-
-The scraper currently writes `results.csv`; convert to `web/data/results.json` (e.g. with `python -c "import csv,json,sys; print(json.dumps([dict(r) for r in csv.DictReader(open('worker/results.csv'))]))" > web/data/results.json`) before committing.
-
-## Auth
-
-Single-user shim — credentials in env vars, JWT-signed cookie. Real auth (Supabase, OAuth) comes next.
+- Anonymous browser scraping; no GitHub login. Hits a real-browser rate limit faster than the API does — proxies help with the network-level cap.
+- Synchronous Playwright instance per job. Concurrent jobs share the OS but each spawns its own Chromium — be mindful on small machines.
+- Flask dev server isn't production-grade. Use `waitress` (already in requirements) behind a reverse proxy if you expose this externally.
