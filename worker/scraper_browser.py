@@ -157,18 +157,99 @@ class Repo:
 
 async def new_context(browser: Browser, proxy: dict | None) -> BrowserContext:
     """Build a context with randomized fingerprint. Proxy is set per-context."""
+    locale = random.choice(LOCALES)
     return await browser.new_context(
         user_agent=random.choice(USER_AGENTS),
         viewport=random.choice(VIEWPORTS),
-        locale=random.choice(LOCALES),
+        locale=locale,
         timezone_id=random.choice(TIMEZONES),
         proxy=proxy,
         java_script_enabled=True,
+        # Match Accept-Language to locale so headers don't betray us.
+        extra_http_headers={
+            "Accept-Language": f"{locale},{locale.split('-')[0]};q=0.9",
+        },
+        # Slight color/scale variance — common real-world values.
+        device_scale_factor=random.choice([1, 1, 1, 2]),
+        color_scheme=random.choice(["light", "light", "dark"]),
     )
 
 
 async def human_pause(min_s: float = 1.5, max_s: float = 4.0) -> None:
     await asyncio.sleep(random.uniform(min_s, max_s))
+
+
+# ---- human-like interactions ----------------------------------------------
+
+async def human_mouse_move(page: Page, steps: int = 0) -> None:
+    """Drift the mouse to a random point in small increments."""
+    vp = page.viewport_size or {"width": 1280, "height": 800}
+    target_x = random.randint(50, vp["width"] - 50)
+    target_y = random.randint(50, vp["height"] - 50)
+    # `steps` argument to mouse.move smooths the path; randomize so timing varies.
+    await page.mouse.move(target_x, target_y, steps=steps or random.randint(15, 40))
+
+
+async def human_scroll(page: Page) -> None:
+    """Scroll down in 3–6 chunks with reading pauses, sometimes scroll back up."""
+    chunks = random.randint(3, 6)
+    for _ in range(chunks):
+        delta = random.randint(200, 600)
+        await page.mouse.wheel(0, delta)
+        await asyncio.sleep(random.uniform(0.4, 1.4))
+    # Occasionally scroll back up — humans skim, lose place, re-read.
+    if random.random() < 0.3:
+        await page.mouse.wheel(0, -random.randint(150, 400))
+        await asyncio.sleep(random.uniform(0.3, 0.9))
+
+
+async def human_type(page: Page, selector: str, text: str) -> None:
+    """Type with per-character delay; occasionally pause longer (thinking)."""
+    el = await page.wait_for_selector(selector, timeout=10_000)
+    await el.click()
+    await asyncio.sleep(random.uniform(0.2, 0.6))
+    for ch in text:
+        await page.keyboard.type(ch, delay=random.randint(60, 180))
+        if random.random() < 0.04:  # ~4% chance of a "thinking" pause
+            await asyncio.sleep(random.uniform(0.3, 0.9))
+
+
+async def submit_search(page: Page, query: str) -> bool:
+    """Type the query into GitHub's header search box and submit. Returns True on success."""
+    # GitHub's header has a button that opens the search modal in newer UIs,
+    # or an inline input in older ones. Try the modal flow first.
+    try:
+        # Open the search dialog (the "/" shortcut works on github.com).
+        await page.keyboard.press("/")
+        await asyncio.sleep(random.uniform(0.4, 1.0))
+
+        # Modal input (newer UI) or header input (older UI).
+        selectors = [
+            '#query-builder-test',                       # newer search modal
+            'input[aria-label="Search GitHub"]',          # legacy header
+            'input[name="q"]',                            # fallback
+            'input[placeholder*="Search" i]',
+        ]
+        target = None
+        for sel in selectors:
+            try:
+                el = await page.wait_for_selector(sel, timeout=2_500)
+                if el:
+                    target = sel
+                    break
+            except Exception:
+                continue
+        if not target:
+            return False
+
+        await human_type(page, target, query)
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+        await page.keyboard.press("Enter")
+        await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        return True
+    except Exception as e:
+        print(f"  [warn] typed search failed ({e}); falling back to URL")
+        return False
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -267,6 +348,53 @@ async def parse_results(page: Page, query: str) -> list[Repo]:
     ]
 
 
+async def goto_results(page: Page, query: str) -> None:
+    """Land on the repositories search results for `query`, preferring the typed flow."""
+    typed = await submit_search(page, query)
+    if not typed:
+        # Fallback: direct navigation (still a valid path, just less human).
+        url = f"https://github.com/search?q={quote_plus(query)}&type=repositories"
+        await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        return
+
+    # Typed search lands on type=code by default. Switch to Repositories tab.
+    if "type=repositories" not in page.url:
+        try:
+            tab = await page.wait_for_selector(
+                'a[href*="type=repositories"], nav a:has-text("Repositories")',
+                timeout=8_000,
+            )
+            await human_mouse_move(page)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            await tab.click()
+            await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        except Exception:
+            # Tab not found — bail to URL.
+            url = f"https://github.com/search?q={quote_plus(query)}&type=repositories"
+            await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+
+
+async def click_next_page(page: Page) -> bool:
+    """Click the pagination 'Next' link. Returns False if not present (end of results)."""
+    try:
+        # GitHub's pagination uses an <a> with rel="next" or text "Next".
+        nxt = await page.query_selector('a[rel="next"], a:has-text("Next")')
+        if not nxt:
+            return False
+        # Some pages render a disabled span instead of a link on the last page.
+        is_disabled = await nxt.evaluate("el => el.tagName !== 'A' || el.getAttribute('aria-disabled') === 'true'")
+        if is_disabled:
+            return False
+        await human_mouse_move(page)
+        await asyncio.sleep(random.uniform(0.4, 1.1))
+        await nxt.click()
+        await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        return True
+    except Exception as e:
+        print(f"  [warn] next-page click failed: {e}")
+        return False
+
+
 async def scrape_query(
     browser: Browser,
     proxy_cycle,
@@ -283,36 +411,35 @@ async def scrape_query(
     page = await ctx.new_page()
 
     try:
-        # Warm-up: hit github.com first so we look like a real browsing session.
+        # Warm-up: visit homepage, look around briefly. Real users don't deep-link cold.
         await page.goto("https://github.com/", wait_until="domcontentloaded", timeout=45_000)
-        await human_pause(1.0, 2.5)
+        await human_pause(1.2, 2.8)
+        await human_mouse_move(page)
+        await human_scroll(page)
+        await human_pause(0.8, 1.8)
+
+        # Type the query into the search box; falls back to URL nav if the input isn't found.
+        await goto_results(page, query)
 
         for page_num in range(1, max_pages + 1):
-            url = (
-                f"https://github.com/search?q={quote_plus(query)}"
-                f"&type=repositories&p={page_num}"
-            )
-            print(f"  [page {page_num}] {url}")
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-            except Exception as e:
-                print(f"  [warn] navigation failed: {e}")
-                break
+            print(f"  [page {page_num}] {page.url}")
 
-            # Wait for results or "no results" state.
             try:
                 await page.wait_for_selector(
                     'div[data-testid="results-list"], div[data-testid="empty-results"], h3:has-text("We couldn\'t find any")',
                     timeout=20_000,
                 )
             except Exception:
-                # Could be a rate-limit / login wall. Save HTML for debugging.
                 debug = HERE / f"debug_{int(time.time())}.html"
                 debug.write_text(await page.content(), encoding="utf-8")
                 print(f"  [warn] no results selector; dumped {debug.name}")
                 break
 
-            await human_pause(0.8, 1.8)
+            # Skim the page like a human: small mouse move, scroll through results.
+            await human_pause(0.8, 1.6)
+            await human_mouse_move(page)
+            await human_scroll(page)
+
             page_results = await parse_results(page, query)
             if not page_results:
                 print("  [info] no results on page — stopping")
@@ -329,10 +456,15 @@ async def scrape_query(
             print(f"  -> {new} new ({len(page_results)} on page)")
 
             if new == 0:
-                # Either all duplicates or end of pagination.
+                break
+            if page_num >= max_pages:
                 break
 
+            # Reading pause before paginating.
             await human_pause(2.5, 5.0)
+            if not await click_next_page(page):
+                print("  [info] no next page")
+                break
     finally:
         await ctx.close()
 
