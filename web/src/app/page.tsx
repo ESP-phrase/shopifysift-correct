@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 import { loadResults, topCounts } from "@/lib/results";
 import ResultsTable from "@/components/ResultsTable";
+import { Wordmark } from "@/components/Logo";
 
 async function getUser(): Promise<string | null> {
   const c = await cookies();
@@ -24,12 +25,7 @@ export default async function DashboardPage() {
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_50%_30%_at_0%_100%,rgba(255,87,34,0.10),transparent_60%),radial-gradient(ellipse_50%_30%_at_100%_0%,rgba(255,87,34,0.06),transparent_60%)]" />
       <div className="relative mx-auto max-w-7xl px-6 py-8">
         <header className="mb-8 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md border border-neutral-800 bg-neutral-950 text-lg font-bold">
-              ×
-            </div>
-            <span className="text-lg font-bold">ShopifySift</span>
-          </div>
+          <Wordmark size={32} />
           <div className="flex items-center gap-4 text-sm">
             <span className="text-neutral-400">{user ?? ""}</span>
             <form action="/api/logout" method="POST">
